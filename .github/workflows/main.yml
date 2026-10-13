@@ -18,17 +18,18 @@ jobs:
       - name: Locate Flutter project
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          echo "Searching for pubspec.yaml in repository..."
           PROJECT_FILE=$(git ls-files | grep -E '(^|/)pubspec.yaml$' | head -n 1 || true)
-
           if [ -z "$PROJECT_FILE" ]; then
             echo "ERROR: No Flutter project (pubspec.yaml) found in repository."
-            echo "Repository layout:"
+            echo "Repository layout (top 3 levels):"
             find . -maxdepth 3 -print
             exit 1
           fi
 
-          PROJECT_DIR="$(pwd)/$(dirname "$PROJECT_FILE")"
+          # Normalize to an absolute directory path (no trailing '/.')
+          PROJECT_DIR="$(cd "$(dirname "$PROJECT_FILE")" && pwd)"
           echo "Detected Flutter project at: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
@@ -103,13 +104,30 @@ jobs:
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
-          set -e
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          set -euo pipefail
+          # If any of the signing secrets are missing, skip signing steps (useful for CI without secrets)
+          if [ -z "${BUILD_CERTIFICATE_BASE64:-}" ] || [ -z "${P12_PASSWORD:-}" ] || [ -z "${KEYCHAIN_PASSWORD:-}" ]; then
+            echo "Signing secrets not set. Skipping keychain/certificate import."
+            echo "To enable signing, add repository secrets: BUILD_CERTIFICATE_BASE64, P12_PASSWORD, KEYCHAIN_PASSWORD"
+            exit 0
+          fi
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+
+          # Decode and verify certificate
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode > certificate.p12 || true
+          if [ ! -s certificate.p12 ]; then
+            echo "ERROR: Decoded certificate.p12 is empty. Check BUILD_CERTIFICATE_BASE64 secret encoding."
+            exit 1
+          fi
+
+          # Import certificate into the temporary keychain
           security import certificate.p12 -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+
+          # Ensure keychain is first in search list for code sign operations
           security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | awk '{print $1}')
 
       - name: Import provisioning profile
@@ -117,9 +135,18 @@ jobs:
         env:
           BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
         run: |
-          set -e
+          set -euo pipefail
+          if [ -z "${BUILD_PROVISION_PROFILE_BASE64:-}" ]; then
+            echo "Provisioning profile secret not set. Skipping profile import."
+            echo "To enable signing, add repository secret: BUILD_PROVISION_PROFILE_BASE64"
+            exit 0
+          fi
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode > profile.mobileprovision
+          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode > profile.mobileprovision || true
+          if [ ! -s profile.mobileprovision ]; then
+            echo "ERROR: Decoded profile.mobileprovision is empty. Check BUILD_PROVISION_PROFILE_BASE64 secret encoding."
+            exit 1
+          fi
           cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
 
       - name: Prepare export options
@@ -129,36 +156,53 @@ jobs:
           BUNDLE_ID: ${{ secrets.BUNDLE_ID }}
           PROFILE_NAME: ${{ secrets.PROFILE_NAME }}
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p .github/ios
-          cat > .github/ios/exportOptions.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
+
+          # If signing information is provided, produce an exportOptions that references the provisioning profile.
+          # Otherwise create a minimal exportOptions with manual method: ad-hoc (may be unused if signing skipped).
+          if [ -n "${TEAM_ID:-}" ] && [ -n "${BUNDLE_ID:-}" ] && [ -n "${PROFILE_NAME:-}" ]; then
+            cat > .github/ios/exportOptions.plist <<EOF
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>method</key>
+                <string>ad-hoc</string>
+                <key>teamID</key>
+                <string>${TEAM_ID}</string>
+                <key>signingStyle</key>
+                <string>manual</string>
+                <key>stripSwiftSymbols</key>
+                <true/>
+                <key>compileBitcode</key>
+                <false/>
+                <key>provisioningProfiles</key>
+                <dict>
+                    <key>${BUNDLE_ID}</key>
+                    <string>${PROFILE_NAME}</string>
+                </dict>
+            </dict>
+            </plist>
+            EOF
+          else
+            echo "TEAM_ID/BUNDLE_ID/PROFILE_NAME not fully set. Generating a minimal exportOptions.plist."
+            cat > .github/ios/exportOptions.plist <<EOF
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
               <key>method</key>
               <string>ad-hoc</string>
-              <key>teamID</key>
-              <string>${TEAM_ID}</string>
-              <key>signingStyle</key>
-              <string>manual</string>
-              <key>stripSwiftSymbols</key>
-              <true/>
-              <key>compileBitcode</key>
-              <false/>
-              <key>provisioningProfiles</key>
-              <dict>
-                  <key>${BUNDLE_ID}</key>
-                  <string>${PROFILE_NAME}</string>
-              </dict>
-          </dict>
-          </plist>
-          EOF
+            </dict>
+            </plist>
+            EOF
+          fi
 
       - name: Create iOS archive
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          set -e
+          set -euo pipefail
           xcodebuild -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
@@ -170,7 +214,13 @@ jobs:
       - name: Export IPA
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          set -e
+          set -euo pipefail
+          # If exportOptions.plist exists, use it. If signing was skipped above and export fails, set a helpful error.
+          if [ ! -f .github/ios/exportOptions.plist ]; then
+            echo "ERROR: exportOptions.plist missing. Cannot export archive."
+            exit 1
+          fi
+
           xcodebuild -exportArchive \
             -archivePath build/ios/archive/Runner.xcarchive \
             -exportOptionsPlist .github/ios/exportOptions.plist \
