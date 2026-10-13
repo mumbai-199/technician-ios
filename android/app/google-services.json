@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "822350748333",
+    "project_id": "pest-control-64776",
+    "storage_bucket": "pest-control-64776.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:822350748333:android:5935d31f7a2e38022a8424",
+        "android_client_info": {
+          "package_name": "Fortunex.pest_123"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBsh72wLnO4rvcrwZJsyEH1dJZKfCcQF2k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
