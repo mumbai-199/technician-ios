@@ -20,7 +20,13 @@ jobs:
         run: |
           set -euo pipefail
           echo "Searching for pubspec.yaml in repository..."
+
+          # Prefer tracked file (fast), fallback to filesystem search for nested/untracked files
           PROJECT_FILE=$(git ls-files | grep -E '(^|/)pubspec.yaml$' | head -n 1 || true)
+          if [ -z "$PROJECT_FILE" ]; then
+            PROJECT_FILE=$(find . -maxdepth 6 -type f -name 'pubspec.yaml' -print -quit || true)
+          fi
+
           if [ -z "$PROJECT_FILE" ]; then
             echo "ERROR: No Flutter project (pubspec.yaml) found in repository."
             echo "Repository layout (top 3 levels):"
@@ -105,6 +111,7 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
+
           # If any of the signing secrets are missing, skip signing steps (useful for CI without secrets)
           if [ -z "${BUILD_CERTIFICATE_BASE64:-}" ] || [ -z "${P12_PASSWORD:-}" ] || [ -z "${KEYCHAIN_PASSWORD:-}" ]; then
             echo "Signing secrets not set. Skipping keychain/certificate import."
@@ -162,41 +169,41 @@ jobs:
           # If signing information is provided, produce an exportOptions that references the provisioning profile.
           # Otherwise create a minimal exportOptions with manual method: ad-hoc (may be unused if signing skipped).
           if [ -n "${TEAM_ID:-}" ] && [ -n "${BUNDLE_ID:-}" ] && [ -n "${PROFILE_NAME:-}" ]; then
-            cat > .github/ios/exportOptions.plist <<EOF
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-                <key>method</key>
-                <string>ad-hoc</string>
-                <key>teamID</key>
-                <string>${TEAM_ID}</string>
-                <key>signingStyle</key>
-                <string>manual</string>
-                <key>stripSwiftSymbols</key>
-                <true/>
-                <key>compileBitcode</key>
-                <false/>
-                <key>provisioningProfiles</key>
-                <dict>
-                    <key>${BUNDLE_ID}</key>
-                    <string>${PROFILE_NAME}</string>
-                </dict>
-            </dict>
-            </plist>
-            EOF
+cat > .github/ios/exportOptions.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>ad-hoc</string>
+    <key>teamID</key>
+    <string>${TEAM_ID}</string>
+    <key>signingStyle</key>
+    <string>manual</string>
+    <key>stripSwiftSymbols</key>
+    <true/>
+    <key>compileBitcode</key>
+    <false/>
+    <key>provisioningProfiles</key>
+    <dict>
+        <key>${BUNDLE_ID}</key>
+        <string>${PROFILE_NAME}</string>
+    </dict>
+</dict>
+</plist>
+EOF
           else
             echo "TEAM_ID/BUNDLE_ID/PROFILE_NAME not fully set. Generating a minimal exportOptions.plist."
-            cat > .github/ios/exportOptions.plist <<EOF
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-              <key>method</key>
-              <string>ad-hoc</string>
-            </dict>
-            </plist>
-            EOF
+cat > .github/ios/exportOptions.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>method</key>
+  <string>ad-hoc</string>
+</dict>
+</plist>
+EOF
           fi
 
       - name: Create iOS archive
