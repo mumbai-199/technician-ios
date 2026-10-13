@@ -13,9 +13,6 @@ on:
 jobs:
   build_ios:
     runs-on: macos-15
-    defaults:
-      run:
-        working-directory: "technician app"
 
     steps:
       - name: Checkout repository
@@ -31,6 +28,7 @@ jobs:
         run: flutter --version
 
       - name: Get Flutter dependencies
+        working-directory: 'technician app'
         run: flutter pub get
 
       - name: Setup Ruby for CocoaPods
@@ -43,13 +41,16 @@ jobs:
         run: sudo gem install cocoapods
 
       - name: Install iOS pods
-        run: cd ios && pod install --repo-update
+        working-directory: 'technician app/ios'
+        run: pod install --repo-update
 
       - name: Analyze project
         continue-on-error: true
+        working-directory: 'technician app'
         run: flutter analyze
 
       - name: Build iOS app without codesign
+        working-directory: 'technician app'
         run: flutter build ios --release --no-codesign
 
       - name: Create keychain for signing
@@ -77,6 +78,7 @@ jobs:
           cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
 
       - name: Prepare export options
+        working-directory: 'technician app'
         env:
           TEAM_ID: ${{ secrets.TEAM_ID }}
           BUNDLE_ID: ${{ secrets.BUNDLE_ID }}
@@ -109,6 +111,7 @@ jobs:
           EOF
 
       - name: Create iOS archive
+        working-directory: 'technician app'
         run: |
           set -e
           xcodebuild -workspace ios/Runner.xcworkspace \
@@ -120,6 +123,7 @@ jobs:
             archive
 
       - name: Export IPA
+        working-directory: 'technician app'
         run: |
           set -e
           xcodebuild -exportArchive \
@@ -132,5 +136,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: technician-ios-ipa
-          path: build/ios/ipa/*.ipa
+          path: 'technician app/build/ios/ipa/*.ipa'
           if-no-files-found: error
