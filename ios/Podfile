@@ -40,4 +40,22 @@ def flutter_root
     end
   rescue
     # ignore errors from backticks
- 
+  end
+
+  raise 'FLUTTER_ROOT could not be determined. Set FLUTTER_ROOT or ensure Generated.xcconfig contains FLUTTER_ROOT, or that flutter is on PATH.'
+end
+
+require File.expand_path(File.join(flutter_root, 'packages', 'flutter_tools', 'bin', 'podhelper'), __FILE__)
+
+target 'Runner' do
+  use_frameworks!
+  use_modular_headers!
+
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_ios_build_settings(target)
+  end
+end
