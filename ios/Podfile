@@ -1,4 +1,3 @@
-# ios/Podfile
 platform :ios, '14.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
@@ -11,52 +10,34 @@ project 'Runner', {
 }
 
 def flutter_root
-  configured_flutter_root = ENV['FLUTTER_ROOT']
-  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+  # 1) Use configured FLUTTER_ROOT if valid
+  configured = ENV['FLUTTER_ROOT']
+  if configured && !configured.to_s.strip.empty?
+    podhelper = File.join(configured, 'packages', 'flutter_tools', 'bin', 'podhelper.rb')
+    return configured if File.file?(podhelper)
+  end
 
-  generated_flutter_root = if File.exist?(generated_xcode_build_settings_path)
-    File.foreach(generated_xcode_build_settings_path) do |line|
-      matches = line.match(/FLUTTER_ROOT\s*=\s*(.*)/)
-      break matches[1].strip if matches
+  # 2) Parse ios/Flutter/Generated.xcconfig if present
+  generated_xcconfig = File.expand_path(File.join(__dir__, '..', 'Flutter', 'Generated.xcconfig'))
+  if File.exist?(generated_xcconfig)
+    File.foreach(generated_xcconfig) do |line|
+      if line =~ /FLUTTER_ROOT\s*=\s*(.*)/
+        candidate = $1.strip
+        podhelper = File.join(candidate, 'packages', 'flutter_tools', 'bin', 'podhelper.rb')
+        return candidate if File.file?(podhelper)
+      end
     end
   end
 
-  podhelper_relative_path = File.join('packages', 'flutter_tools', 'bin', 'podhelper.rb')
-  flutter_roots = [configured_flutter_root, generated_flutter_root].compact.reject(&:empty?)
-  valid_flutter_root = flutter_roots.find do |root|
-    File.file?(File.join(root, podhelper_relative_path))
-  end
-
-  return valid_flutter_root if valid_flutter_root
-
-  checked_roots = flutter_roots.empty? ? '(none)' : flutter_roots.join(', ')
-  raise <<~ERROR
-    Could not find Flutter's pod helper at #{podhelper_relative_path}.
-    Checked Flutter SDK roots: #{checked_roots}
-    FLUTTER_ROOT=#{configured_flutter_root.inspect}
-    Generated settings: #{generated_xcode_build_settings_path}
-    Ensure Flutter is installed and run `flutter pub get` before `pod install`.
-  ERROR
-end
-
-require File.join(flutter_root, 'packages', 'flutter_tools', 'bin', 'podhelper.rb')
-
-flutter_ios_podfile_setup
-
-target 'Runner' do
-  use_frameworks!
-  use_modular_headers!
-
-  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-end
-
-post_install do |installer|
-  installer.pods_project.targets.each do |target|
-    flutter_additional_ios_build_settings(target)
-
-    target.build_configurations.each do |config|
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
-      config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
+  # 3) Try locating flutter on PATH (which flutter) and infer SDK root
+  begin
+    flutter_bin = `which flutter`.strip
+    unless flutter_bin.nil? || flutter_bin.empty?
+      # `which flutter` may return path/to/flutter; SDK root is usually two levels up
+      candidate = File.expand_path(File.join(flutter_bin, '..', '..'))
+      podhelper = File.join(candidate, 'packages', 'flutter_tools', 'bin', 'podhelper.rb')
+      return candidate if File.file?(podhelper)
     end
-  end
-end
+  rescue
+    # ignore errors from backticks
+ 
