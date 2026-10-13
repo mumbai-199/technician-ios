@@ -1,0 +1,198 @@
+name: iOS Flutter CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_ios:
+    runs-on: macos-latest
+    env:
+      FLUTTER_ROOT: ${{ github.workspace }}/../flutter
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect Flutter app directory
+        id: detect_app
+        run: |
+          if [ -f pubspec.yaml ]; then
+            APP_DIR="."
+          else
+            found="$(find . -maxdepth 3 -type f -name pubspec.yaml | head -n 1 || true)"
+            if [ -z "$found" ]; then
+              echo "No pubspec.yaml found in repo (not a Flutter project?)" >&2
+              exit 1
+            fi
+            APP_DIR="$(dirname "$found")"
+          fi
+          APP_DIR="${APP_DIR#./}"
+          echo "APP_DIR=$APP_DIR" >> $GITHUB_ENV
+
+      - name: Install Flutter from GitHub (stable)
+        run: |
+          set -euxo pipefail
+          rm -rf "$HOME/flutter" || true
+          git clone https://github.com/flutter/flutter.git -b stable --depth 1 "$HOME/flutter"
+          echo "$HOME/flutter/bin" >> $GITHUB_PATH
+          export PATH="$HOME/flutter/bin:$PATH"
+          flutter --version
+          flutter precache --ios
+
+      - name: Setup Flutter environment
+        run: |
+          export PATH="$HOME/flutter/bin:$PATH"
+          flutter doctor -v
+
+      - name: Update Xcode project deployment target
+        working-directory: ${{ env.APP_DIR }}/ios
+        run: |
+          set -e
+          echo "Updating Runner.xcodeproj to target iOS 15.0..."
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' Runner.xcodeproj/project.pbxproj
+          grep "IPHONEOS_DEPLOYMENT_TARGET = 15.0" Runner.xcodeproj/project.pbxproj | head -3
+          echo "✓ Project deployment target updated"
+
+      - name: Ensure iOS Podfile targets iOS 15.0
+        working-directory: ${{ env.APP_DIR }}/ios
+        run: |
+          set -e
+          echo "Updating Podfile platform target..."
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('Podfile')
+          text = path.read_text()
+
+          if re.search(r"^platform\s+:ios", text, re.MULTILINE):
+              text = re.sub(r"^platform\s+:ios.*$", "platform :ios, '15.0'", text, count=1, flags=re.MULTILINE)
+          else:
+              text = "platform :ios, '15.0'\n" + text
+
+          path.write_text(text)
+          print("Podfile updated successfully")
+          PY
+          grep -n "^platform :ios" Podfile
+
+      - name: Cache pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Clean iOS directory
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          set -e
+          if [ ! -d "ios" ]; then
+            echo "ERROR: ios/ directory not found" >&2
+            exit 1
+          fi
+          rm -rf ios/Pods ios/Podfile.lock ios/.symlinks ios/Runner.xcworkspace
+          rm -rf ios/Flutter/Flutter.podspec ios/Flutter/engine_flutter.podspec
+          rm -rf ios/Flutter/Flutter.framework
+          rm -rf build/
+
+      - name: Install Dart/Flutter dependencies
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          set -e
+          export PATH="$HOME/flutter/bin:$PATH"
+          rm -f pubspec.lock
+          flutter pub get
+          flutter precache --ios
+
+      - name: Install CocoaPods
+        run: |
+          set -e
+          sudo gem install cocoapods --no-document
+
+      - name: Install iOS pods
+        working-directory: ${{ env.APP_DIR }}/ios
+        run: |
+          set -e
+          echo "Checking Podfile syntax..."
+          ruby -c Podfile && echo "✓ Podfile syntax is valid"
+
+          echo "Installing CocoaPods dependencies..."
+          pod install --repo-update
+
+      - name: Verify iOS project
+        run: |
+          ios_dir="${{ env.APP_DIR }}/ios"
+          if [ ! -d "$ios_dir" ]; then
+            echo "ERROR: No ios/ directory at $ios_dir" >&2
+            exit 1
+          fi
+          if [ ! -d "$ios_dir/Runner.xcworkspace" ]; then
+            echo "ERROR: No Runner.xcworkspace generated" >&2
+            exit 1
+          fi
+
+      - name: Build iOS app for simulator
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          set -e
+          export PATH="$HOME/flutter/bin:$PATH"
+          flutter build ios --no-codesign --simulator -v
+
+      - name: Build iOS app for device
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          set -e
+          export PATH="$HOME/flutter/bin:$PATH"
+          echo "🔨 Building iOS app for device (release)..."
+          flutter build ios --no-codesign --release -v
+
+      - name: Create IPA from device build
+        working-directory: ${{ env.APP_DIR }}/build/ios
+        run: |
+          set -e
+          echo "📦 Creating IPA file..."
+          mkdir -p output
+          cd Release-iphoneos
+          zip -r ../output/Runner.ipa Runner.app
+          ls -lh ../output/Runner.ipa
+
+      - name: Archive built app
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          set -e
+          echo "📦 Creating app archive..."
+          cd build/ios/Debug-iphonesimulator
+          zip -r Runner.app.zip Runner.app
+          ls -lh Runner.app.zip
+
+      - name: Upload iOS app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-app-simulator
+          path: ${{ env.APP_DIR }}/build/ios/Debug-iphonesimulator/Runner.app.zip
+          retention-days: 30
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-app-ipa
+          path: ${{ env.APP_DIR }}/build/ios/output/Runner.ipa
+          retention-days: 30
+
+      - name: Create build summary
+        run: |
+          echo "✅ iOS Build Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- **Simulator App**: ios-app-simulator (Debug-iphonesimulator)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Device IPA**: ios-app-ipa (for real iPhone)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Installation Guide" >> $GITHUB_STEP_SUMMARY
+          echo "### For Real iPhone:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Download **ios-app-ipa** artifact" >> $GITHUB_STEP_SUMMARY
+          echo "2. Use Xcode or iOS App Installer to install" >> $GITHUB_STEP_SUMMARY
+          echo "3. Or upload to TestFlight for distribution" >> $GITHUB_STEP_SUMMARY
