@@ -6,19 +6,31 @@ on:
     branches:
       - main
       - master
-    paths:
-      - 'technician-app/**'
-      - 'technician-app/.github/workflows/ios-build.yml'
 
 jobs:
   build_ios:
     runs-on: macos-15
-    env:
-      PROJECT_DIR: ${{ github.workspace }}/technician-app
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Locate Flutter project
+        shell: bash
+        run: |
+          set -e
+          PROJECT_FILE=$(git ls-files | grep -E '(^|/)pubspec.yaml$' | head -n 1 || true)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: No Flutter project (pubspec.yaml) found in repository."
+            echo "Repository layout:"
+            find . -maxdepth 3 -print
+            exit 1
+          fi
+
+          PROJECT_DIR="$(pwd)/$(dirname "$PROJECT_FILE")"
+          echo "Detected Flutter project at: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Show repository layout
         run: |
@@ -26,6 +38,7 @@ jobs:
           ls -la
           echo "Top-level directories:"
           find . -maxdepth 2 -type d -print
+          echo "Project directory: ${{ env.PROJECT_DIR }}"
 
       - name: Verify project directory exists
         run: |
