@@ -21,7 +21,7 @@ def flutter_root
     end
   end
 
-  podhelper_relative_path = File.join('packages', 'flutter_tools', 'bin', 'podhelper')
+  podhelper_relative_path = File.join('packages', 'flutter_tools', 'bin', 'podhelper.rb')
   flutter_roots = [configured_flutter_root, generated_flutter_root].compact.reject(&:empty?)
   valid_flutter_root = flutter_roots.find do |root|
     File.file?(File.join(root, podhelper_relative_path))
@@ -39,7 +39,7 @@ def flutter_root
   ERROR
 end
 
-require File.join(flutter_root, 'packages', 'flutter_tools', 'bin', 'podhelper')
+require File.join(flutter_root, 'packages', 'flutter_tools', 'bin', 'podhelper.rb')
 
 flutter_ios_podfile_setup
 
