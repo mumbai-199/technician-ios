@@ -11,19 +11,35 @@ project 'Runner', {
 }
 
 def flutter_root
+  configured_flutter_root = ENV['FLUTTER_ROOT']
   generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
-  unless File.exist?(generated_xcode_build_settings_path)
-    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first"
+
+  generated_flutter_root = if File.exist?(generated_xcode_build_settings_path)
+    File.foreach(generated_xcode_build_settings_path) do |line|
+      matches = line.match(/FLUTTER_ROOT\s*=\s*(.*)/)
+      break matches[1].strip if matches
+    end
   end
 
-  File.foreach(generated_xcode_build_settings_path) do |line|
-    matches = line.match(/FLUTTER_ROOT\s*=\s*(.*)/)
-    return matches[1].strip if matches
+  podhelper_relative_path = File.join('packages', 'flutter_tools', 'bin', 'podhelper')
+  flutter_roots = [configured_flutter_root, generated_flutter_root].compact.reject(&:empty?)
+  valid_flutter_root = flutter_roots.find do |root|
+    File.file?(File.join(root, podhelper_relative_path))
   end
-  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
+
+  return valid_flutter_root if valid_flutter_root
+
+  checked_roots = flutter_roots.empty? ? '(none)' : flutter_roots.join(', ')
+  raise <<~ERROR
+    Could not find Flutter's pod helper at #{podhelper_relative_path}.
+    Checked Flutter SDK roots: #{checked_roots}
+    FLUTTER_ROOT=#{configured_flutter_root.inspect}
+    Generated settings: #{generated_xcode_build_settings_path}
+    Ensure Flutter is installed and run `flutter pub get` before `pod install`.
+  ERROR
 end
 
-require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+require File.join(flutter_root, 'packages', 'flutter_tools', 'bin', 'podhelper')
 
 flutter_ios_podfile_setup
 
