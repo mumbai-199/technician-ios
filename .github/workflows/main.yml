@@ -111,7 +111,6 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
-
           # If any of the signing secrets are missing, skip signing steps (useful for CI without secrets)
           if [ -z "${BUILD_CERTIFICATE_BASE64:-}" ] || [ -z "${P12_PASSWORD:-}" ] || [ -z "${KEYCHAIN_PASSWORD:-}" ]; then
             echo "Signing secrets not set. Skipping keychain/certificate import."
@@ -148,6 +147,7 @@ jobs:
             echo "To enable signing, add repository secret: BUILD_PROVISION_PROFILE_BASE64"
             exit 0
           fi
+
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode > profile.mobileprovision || true
           if [ ! -s profile.mobileprovision ]; then
@@ -166,44 +166,41 @@ jobs:
           set -euo pipefail
           mkdir -p .github/ios
 
-          # If signing information is provided, produce an exportOptions that references the provisioning profile.
-          # Otherwise create a minimal exportOptions with manual method: ad-hoc (may be unused if signing skipped).
+          # Write a fully-specified exportOptions.plist when signing info is provided
           if [ -n "${TEAM_ID:-}" ] && [ -n "${BUNDLE_ID:-}" ] && [ -n "${PROFILE_NAME:-}" ]; then
-cat > .github/ios/exportOptions.plist <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>method</key>
-    <string>ad-hoc</string>
-    <key>teamID</key>
-    <string>${TEAM_ID}</string>
-    <key>signingStyle</key>
-    <string>manual</string>
-    <key>stripSwiftSymbols</key>
-    <true/>
-    <key>compileBitcode</key>
-    <false/>
-    <key>provisioningProfiles</key>
-    <dict>
-        <key>${BUNDLE_ID}</key>
-        <string>${PROFILE_NAME}</string>
-    </dict>
-</dict>
-</plist>
-EOF
+            printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+              '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+              '<plist version="1.0">' \
+              '<dict>' \
+              '    <key>method</key>' \
+              '    <string>ad-hoc</string>' \
+              '    <key>teamID</key>' \
+              "    <string>${TEAM_ID}</string>" \
+              '    <key>signingStyle</key>' \
+              '    <string>manual</string>' \
+              '    <key>stripSwiftSymbols</key>' \
+              '    <true/>' \
+              '    <key>compileBitcode</key>' \
+              '    <false/>' \
+              '    <key>provisioningProfiles</key>' \
+              '    <dict>' \
+              "        <key>${BUNDLE_ID}</key>" \
+              "        <string>${PROFILE_NAME}</string>" \
+              '    </dict>' \
+              '</dict>' \
+              '</plist>' \
+              > .github/ios/exportOptions.plist
           else
             echo "TEAM_ID/BUNDLE_ID/PROFILE_NAME not fully set. Generating a minimal exportOptions.plist."
-cat > .github/ios/exportOptions.plist <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>method</key>
-  <string>ad-hoc</string>
-</dict>
-</plist>
-EOF
+            printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+              '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+              '<plist version="1.0">' \
+              '<dict>' \
+              '  <key>method</key>' \
+              '  <string>ad-hoc</string>' \
+              '</dict>' \
+              '</plist>' \
+              > .github/ios/exportOptions.plist
           fi
 
       - name: Create iOS archive
@@ -222,7 +219,6 @@ EOF
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
-          # If exportOptions.plist exists, use it. If signing was skipped above and export fails, set a helpful error.
           if [ ! -f .github/ios/exportOptions.plist ]; then
             echo "ERROR: exportOptions.plist missing. Cannot export archive."
             exit 1
