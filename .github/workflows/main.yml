@@ -34,7 +34,6 @@ jobs:
             exit 1
           fi
 
-          # Normalize to an absolute directory path (no trailing '/.')
           PROJECT_DIR="$(cd "$(dirname "$PROJECT_FILE")" && pwd)"
           echo "Detected Flutter project at: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
@@ -104,6 +103,7 @@ jobs:
         run: flutter build ios --release --no-codesign
 
       - name: Create keychain for signing
+        if: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && secrets.P12_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' }}
         working-directory: ${{ env.PROJECT_DIR }}
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
@@ -111,42 +111,28 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
-          # If any of the signing secrets are missing, skip signing steps (useful for CI without secrets)
-          if [ -z "${BUILD_CERTIFICATE_BASE64:-}" ] || [ -z "${P12_PASSWORD:-}" ] || [ -z "${KEYCHAIN_PASSWORD:-}" ]; then
-            echo "Signing secrets not set. Skipping keychain/certificate import."
-            echo "To enable signing, add repository secrets: BUILD_CERTIFICATE_BASE64, P12_PASSWORD, KEYCHAIN_PASSWORD"
-            exit 0
-          fi
 
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          # Decode and verify certificate
           echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode > certificate.p12 || true
           if [ ! -s certificate.p12 ]; then
             echo "ERROR: Decoded certificate.p12 is empty. Check BUILD_CERTIFICATE_BASE64 secret encoding."
             exit 1
           fi
 
-          # Import certificate into the temporary keychain
           security import certificate.p12 -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-
-          # Ensure keychain is first in search list for code sign operations
           security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | awk '{print $1}')
 
       - name: Import provisioning profile
+        if: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 != '' }}
         working-directory: ${{ env.PROJECT_DIR }}
         env:
           BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
         run: |
           set -euo pipefail
-          if [ -z "${BUILD_PROVISION_PROFILE_BASE64:-}" ]; then
-            echo "Provisioning profile secret not set. Skipping profile import."
-            echo "To enable signing, add repository secret: BUILD_PROVISION_PROFILE_BASE64"
-            exit 0
-          fi
 
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode > profile.mobileprovision || true
@@ -154,6 +140,7 @@ jobs:
             echo "ERROR: Decoded profile.mobileprovision is empty. Check BUILD_PROVISION_PROFILE_BASE64 secret encoding."
             exit 1
           fi
+
           cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
 
       - name: Prepare export options
@@ -166,9 +153,9 @@ jobs:
           set -euo pipefail
           mkdir -p .github/ios
 
-          # Write a fully-specified exportOptions.plist when signing info is provided
           if [ -n "${TEAM_ID:-}" ] && [ -n "${BUNDLE_ID:-}" ] && [ -n "${PROFILE_NAME:-}" ]; then
-            printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+            printf '%s\n' \
+              '<?xml version="1.0" encoding="UTF-8"?>' \
               '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
               '<plist version="1.0">' \
               '<dict>' \
@@ -192,7 +179,8 @@ jobs:
               > .github/ios/exportOptions.plist
           else
             echo "TEAM_ID/BUNDLE_ID/PROFILE_NAME not fully set. Generating a minimal exportOptions.plist."
-            printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+            printf '%s\n' \
+              '<?xml version="1.0" encoding="UTF-8"?>' \
               '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
               '<plist version="1.0">' \
               '<dict>' \
@@ -204,6 +192,7 @@ jobs:
           fi
 
       - name: Create iOS archive
+        if: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && secrets.P12_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' && secrets.BUILD_PROVISION_PROFILE_BASE64 != '' && secrets.TEAM_ID != '' && secrets.BUNDLE_ID != '' && secrets.PROFILE_NAME != '' }}
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
@@ -216,6 +205,7 @@ jobs:
             archive
 
       - name: Export IPA
+        if: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && secrets.P12_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' && secrets.BUILD_PROVISION_PROFILE_BASE64 != '' && secrets.TEAM_ID != '' && secrets.BUNDLE_ID != '' && secrets.PROFILE_NAME != '' }}
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
@@ -230,7 +220,16 @@ jobs:
             -exportPath build/ios/ipa \
             -allowProvisioningUpdates
 
+      - name: Upload unsigned build output
+        if: ${{ secrets.BUILD_CERTIFICATE_BASE64 == '' || secrets.P12_PASSWORD == '' || secrets.KEYCHAIN_PASSWORD == '' || secrets.BUILD_PROVISION_PROFILE_BASE64 == '' || secrets.TEAM_ID == '' || secrets.BUNDLE_ID == '' || secrets.PROFILE_NAME == '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: technician-ios-unsigned
+          path: '${{ env.PROJECT_DIR }}/build/ios/**'
+          if-no-files-found: ignore
+
       - name: Upload iOS artifact
+        if: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && secrets.P12_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' && secrets.BUILD_PROVISION_PROFILE_BASE64 != '' && secrets.TEAM_ID != '' && secrets.BUNDLE_ID != '' && secrets.PROFILE_NAME != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: technician-ios-ipa
